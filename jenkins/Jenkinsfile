@@ -57,32 +57,33 @@ pipeline {
 
 
         stage('Deploy to Dev') {
-
             steps {
-
-                sh """
-
-                    docker tag \
-                    ${ECR_REPO}:${GIT_SHA} \
-                    ${ECR_REPO}:dev
-
-
-                    docker push \
-                    ${ECR_REPO}:dev
-
-
-
-                    helm upgrade --install releasegate-dev ./helm-chart \
-                    -f ./helm-chart/values-dev.yaml \
-                    --set image.repository=${ECR_REPO} \
-                    --set image.tag=dev \
-                    --kubeconfig ${KUBECONFIG_PATH} \
-                    --namespace dev \
-                    --create-namespace \
-                    --wait \
-                    --timeout 10m
-
-                """
+                // 1. Authenticate with Kubernetes using your saved Kubeconfig
+                withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
+                    sh """
+                        export KUBECONFIG=${KUBECONFIG_PATH}
+                        
+                        // 2. Create the dev namespace if it doesn't exist
+                        kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        // 3. Fetch a fresh ECR password and create/update the pull secret in Kubernetes
+                        ECR_PASSWORD=\$(aws ecr get-login-password --region us-east-1)
+                        kubectl create secret docker-registry ecr-registry-secret \
+                            --docker-server=${ECR_REPO} \
+                            --docker-username=AWS \
+                            --docker-password=\${ECR_PASSWORD} \
+                            --namespace dev \
+                            --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        // 4. Run your Helm upgrade command
+                        helm upgrade --install releasegate-dev ./helm-chart \
+                            -f ./helm-chart/values-dev.yaml \
+                            --set image.repository=${ECR_REPO} \
+                            --set image.tag=dev \
+                            --namespace dev \
+                            --wait --timeout 10m
+                    """
+                }
             }
         }
 
