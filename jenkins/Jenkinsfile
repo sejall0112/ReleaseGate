@@ -1,4 +1,34 @@
-stage('Deploy to Dev') {
+pipeline {
+    agent any
+
+    environment {
+        // Replace with your actual ECR URL from Step 3 (omit the repository name at the end)
+        ECR_REPO = "236172119834.dkr.ecr.us-east-1.amazonaws.com/releasegate-app"
+    }
+
+    stages {
+        stage('Build Image') {
+            steps {
+                sh 'docker build -t ${ECR_REPO}:${GIT_COMMIT[0..6]} ./app'
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                    sh '''
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="us-east-1"
+                        
+                        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${ECR_REPO}
+                        docker push ${ECR_REPO}:${GIT_COMMIT[0..6]}
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Dev') {
             steps {
                 withCredentials([
                     file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH'),
@@ -10,7 +40,6 @@ stage('Deploy to Dev') {
                         export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
                         export AWS_DEFAULT_REGION="us-east-1"
                         
-                        # Get the short commit SHA natively in the shell
                         IMAGE_TAG=$(git rev-parse --short HEAD)
                         
                         kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
@@ -57,7 +86,6 @@ stage('Deploy to Dev') {
                         export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
                         export AWS_DEFAULT_REGION="us-east-1"
                         
-                        # Get the short commit SHA natively in the shell
                         IMAGE_TAG=$(git rev-parse --short HEAD)
                         
                         kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
@@ -80,3 +108,74 @@ stage('Deploy to Dev') {
                 }
             }
         }
+
+        stage('Health Check: Staging') {
+            steps {
+                withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        kubectl rollout status deployment/releasegate-app-staging --namespace staging --timeout=120s
+                    '''
+                }
+            }
+        }
+
+        stage('Approval Gate') {
+            steps {
+                input message: 'Promote deployment to Production?', ok: 'Release to Prod'
+            }
+        }
+
+        stage('Promote to Prod') {
+            steps {
+                withCredentials([
+                    file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH'),
+                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="us-east-1"
+                        
+                        IMAGE_TAG=$(git rev-parse --short HEAD)
+                        
+                        kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
+                        kubectl create secret docker-registry ecr-registry-secret \
+                            --docker-server="${ECR_REPO}" \
+                            --docker-username=AWS \
+                            --docker-password="${ECR_PASSWORD}" \
+                            --namespace prod \
+                            --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        helm upgrade --install releasegate-prod ./helm-chart \
+                            -f ./helm-chart/values-prod.yaml \
+                            --set image.repository="${ECR_REPO}" \
+                            --set image.tag="${IMAGE_TAG}" \
+                            --namespace prod \
+                            --wait --timeout 10m
+                    '''
+                }
+            }
+        }
+
+        stage('Health Check: Prod') {
+            steps {
+                withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        kubectl rollout status deployment/releasegate-app-prod --namespace prod --timeout=120s
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo "Pipeline failed."
+        }
+    }
+}
