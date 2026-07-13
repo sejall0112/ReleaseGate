@@ -122,7 +122,7 @@ pipeline {
                         helm upgrade --install releasegate-staging ./helm-chart \
                             -f ./helm-chart/values-staging.yaml \
                             --set image.repository="${ECR_REPO}" \
-                            --set image.tag=staging \
+                            --set image.tag=${GIT_COMMIT[0..6]} \
                             --namespace staging \
                             --wait --timeout 10m
                     '''
