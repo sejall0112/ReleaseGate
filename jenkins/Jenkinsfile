@@ -1,59 +1,4 @@
-pipeline {
-
-    agent any
-
-    environment {
-        AWS_REGION      = 'us-east-1'
-        ECR_REPO        = "236172119834.dkr.ecr.us-east-1.amazonaws.com/releasegate-app"
-        GIT_SHA         = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
-        KUBECONFIG_PATH = credentials('releasegate-kubeconfig')
-    }
-
-
-    stages {
-
-
-        stage('Build Image') {
-            steps {
-                sh """
-                    docker build \
-                    -t ${ECR_REPO}:${GIT_SHA} \
-                    ./app
-                """
-            }
-        }
-
-
-
-        stage('Push to ECR') {
-
-            steps {
-
-                withCredentials([
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-ecr']
-                ]) {
-
-
-                    sh '''
-                    IMAGE=${ECR_REPO}:${GIT_SHA}
-
-
-                    aws ecr get-login-password \
-                    --region ${AWS_REGION} |
-                    docker login \
-                    --username AWS \
-                    --password-stdin ${ECR_REPO}
-
-
-                    docker push ${IMAGE}
-
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to Dev') {
+stage('Deploy to Dev') {
             steps {
                 withCredentials([
                     file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH'),
@@ -64,6 +9,9 @@ pipeline {
                         export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
                         export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
                         export AWS_DEFAULT_REGION="us-east-1"
+                        
+                        # Get the short commit SHA natively in the shell
+                        IMAGE_TAG=$(git rev-parse --short HEAD)
                         
                         kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
                         
@@ -78,7 +26,7 @@ pipeline {
                         helm upgrade --install releasegate-dev ./helm-chart \
                             -f ./helm-chart/values-dev.yaml \
                             --set image.repository="${ECR_REPO}" \
-                            --set image.tag=dev \
+                            --set image.tag="${IMAGE_TAG}" \
                             --namespace dev \
                             --wait --timeout 10m
                     '''
@@ -109,6 +57,9 @@ pipeline {
                         export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
                         export AWS_DEFAULT_REGION="us-east-1"
                         
+                        # Get the short commit SHA natively in the shell
+                        IMAGE_TAG=$(git rev-parse --short HEAD)
+                        
                         kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
                         
                         ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
@@ -122,235 +73,10 @@ pipeline {
                         helm upgrade --install releasegate-staging ./helm-chart \
                             -f ./helm-chart/values-staging.yaml \
                             --set image.repository="${ECR_REPO}" \
-                            --set image.tag=${GIT_COMMIT[0..6]} \
+                            --set image.tag="${IMAGE_TAG}" \
                             --namespace staging \
                             --wait --timeout 10m
                     '''
                 }
             }
         }
-
-        stage('Health Check: Staging') {
-            steps {
-                withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
-                    sh '''
-                        export KUBECONFIG="${KUBECONFIG_PATH}"
-                        kubectl rollout status deployment/releasegate-app-staging --namespace staging --timeout=120s
-                    '''
-                }
-            }
-        }
-
-        stage('Approval Gate') {
-
-            steps {
-
-                input(
-                    message:"Promote build ${GIT_SHA} to PRODUCTION?",
-                    ok:"Promote"
-                )
-
-            }
-        }
-
-
-
-
-
-
-
-
-        stage('Promote to Prod') {
-
-            steps {
-
-
-                sh """
-
-                    docker tag \
-                    ${ECR_REPO}:${GIT_SHA} \
-                    ${ECR_REPO}:prod
-
-
-
-                    docker push \
-                    ${ECR_REPO}:prod
-
-
-
-
-
-                    helm upgrade --install releasegate-prod ./helm-chart \
-                    -f ./helm-chart/values-prod.yaml \
-                    --set image.repository=${ECR_REPO} \
-                    --set image.tag=prod \
-                    --kubeconfig ${KUBECONFIG_PATH} \
-                    --namespace prod \
-                    --create-namespace \
-                    --wait \
-                    --timeout 10m
-
-
-                """
-            }
-        }
-
-
-
-
-
-
-        stage('Health Check: Prod') {
-
-            steps {
-
-                script {
-
-                    healthCheck(
-                        namespace:'prod',
-                        environment:'prod'
-                    )
-
-                }
-
-            }
-        }
-
-
-    }
-
-
-
-
-
-    post {
-
-
-        failure {
-
-
-            echo "Pipeline failed."
-
-
-            sh """
-
-            echo "Checking Helm releases..."
-
-            helm list -A \
-            --kubeconfig ${KUBECONFIG_PATH}
-
-
-            echo "Attempting rollback..."
-
-
-            helm rollback releasegate-dev \
-            --namespace dev \
-            --kubeconfig ${KUBECONFIG_PATH} \
-            || true
-
-
-
-            helm rollback releasegate-staging \
-            --namespace staging \
-            --kubeconfig ${KUBECONFIG_PATH} \
-            || true
-
-
-
-            helm rollback releasegate-prod \
-            --namespace prod \
-            --kubeconfig ${KUBECONFIG_PATH} \
-            || true
-
-
-            """
-
-        }
-
-
-
-        success {
-
-
-            echo """
-            Build ${GIT_SHA}
-            promoted successfully:
-            
-            DEV
-             |
-            STAGING
-             |
-            PROD
-            """
-
-        }
-
-
-    }
-
-}
-
-
-
-
-
-def healthCheck(Map args) {
-
-
-    def namespace = args.namespace
-    def environment = args.environment
-
-
-
-    sh """
-
-        set -e
-
-
-
-        echo "Waiting for deployment readiness..."
-
-
-
-        kubectl \
-        --kubeconfig ${KUBECONFIG_PATH} \
-        -n ${namespace} \
-        rollout status \
-        deployment/releasegate-app-${environment} \
-        --timeout=120s
-
-
-
-
-
-        POD=\\\$(kubectl \
-        --kubeconfig ${KUBECONFIG_PATH} \
-        -n ${namespace} \
-        get pods \
-        -l app=releasegate-app,environment=${environment} \
-        -o jsonpath='{.items[0].metadata.name}')
-
-
-
-
-
-        echo "Checking application health..."
-
-
-
-        kubectl \
-        --kubeconfig ${KUBECONFIG_PATH} \
-        -n ${namespace} \
-        exec \\\$POD \
-        -- python -c "
-        import urllib.request;
-        print(
-        urllib.request.urlopen(
-        'http://localhost:5000/health'
-        ).read()
-        )
-        "
-
-
-    """
-}
