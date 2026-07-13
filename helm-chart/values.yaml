@@ -1,0 +1,30 @@
+replicaCount: 1
+
+image:
+  repository: "" # set via --set or environment values file, e.g. <account>.dkr.ecr.<region>.amazonaws.com/releasegate-app
+  tag: "dev"     # this gets overridden per environment; promotion retags the same digest
+  pullPolicy: Always
+
+environment: dev
+
+service:
+  type: NodePort
+  port: 5000
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+livenessProbe:
+  path: /health
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  path: /health
+  initialDelaySeconds: 3
+  periodSeconds: 5

@@ -1,0 +1,9 @@
+environment: dev
+
+image:
+  tag: dev
+
+replicaCount: 1
+
+service:
+  type: NodePort

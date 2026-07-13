@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: releasegate-app-{{ .Values.environment }}
+  labels:
+    app: releasegate-app
+    environment: {{ .Values.environment }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: releasegate-app
+    environment: {{ .Values.environment }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: 5000
+      protocol: TCP

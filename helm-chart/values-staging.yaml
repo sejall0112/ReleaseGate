@@ -1,0 +1,9 @@
+environment: staging
+
+image:
+  tag: staging
+
+replicaCount: 1
+
+service:
+  type: NodePort

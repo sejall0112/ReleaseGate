@@ -1,0 +1,6 @@
+apiVersion: v2
+name: releasegate-app
+description: Helm chart for the ReleaseGate sample app, reused across dev/staging/prod
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,141 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION      = 'us-east-1'
+        ECR_REPO        = "<account-id>.dkr.ecr.${AWS_REGION}.amazonaws.com/releasegate-app"
+        GIT_SHA         = "${env.GIT_COMMIT.take(7)}"
+        KUBECONFIG_PATH = credentials('releasegate-kubeconfig') // Jenkins secret file credential
+    }
+
+    stages {
+
+        stage('Build Image') {
+            steps {
+                sh """
+                    docker build -t ${ECR_REPO}:${GIT_SHA} ./app
+                """
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR_REPO}
+                    docker push ${ECR_REPO}:${GIT_SHA}
+                """
+            }
+        }
+
+        stage('Deploy to Dev') {
+            steps {
+                sh """
+                    docker tag ${ECR_REPO}:${GIT_SHA} ${ECR_REPO}:dev
+                    docker push ${ECR_REPO}:dev
+
+                    helm upgrade --install releasegate-dev ./helm-chart \
+                        -f ./helm-chart/values-dev.yaml \
+                        --set image.repository=${ECR_REPO} \
+                        --set image.tag=dev \
+                        --kubeconfig ${KUBECONFIG_PATH} \
+                        --namespace dev --create-namespace \
+                        --atomic --timeout 2m
+                """
+            }
+        }
+
+        stage('Health Check: Dev') {
+            steps {
+                script {
+                    healthCheck(namespace: 'dev', environment: 'dev')
+                }
+            }
+        }
+
+        stage('Promote to Staging') {
+            steps {
+                // Same image, retagged — never rebuilt. This is the immutability guarantee.
+                sh """
+                    docker tag ${ECR_REPO}:${GIT_SHA} ${ECR_REPO}:staging
+                    docker push ${ECR_REPO}:staging
+
+                    helm upgrade --install releasegate-staging ./helm-chart \
+                        -f ./helm-chart/values-staging.yaml \
+                        --set image.repository=${ECR_REPO} \
+                        --set image.tag=staging \
+                        --kubeconfig ${KUBECONFIG_PATH} \
+                        --namespace staging --create-namespace \
+                        --atomic --timeout 2m
+                """
+            }
+        }
+
+        stage('Health Check: Staging') {
+            steps {
+                script {
+                    healthCheck(namespace: 'staging', environment: 'staging')
+                }
+            }
+        }
+
+        stage('Approval Gate') {
+            steps {
+                // Simulates a release-manager sign-off before touching production.
+                input message: "Promote build ${GIT_SHA} to PRODUCTION?", ok: 'Promote'
+            }
+        }
+
+        stage('Promote to Prod') {
+            steps {
+                sh """
+                    docker tag ${ECR_REPO}:${GIT_SHA} ${ECR_REPO}:prod
+                    docker push ${ECR_REPO}:prod
+
+                    helm upgrade --install releasegate-prod ./helm-chart \
+                        -f ./helm-chart/values-prod.yaml \
+                        --set image.repository=${ECR_REPO} \
+                        --set image.tag=prod \
+                        --kubeconfig ${KUBECONFIG_PATH} \
+                        --namespace prod --create-namespace \
+                        --atomic --timeout 2m
+                """
+            }
+        }
+
+        stage('Health Check: Prod') {
+            steps {
+                script {
+                    healthCheck(namespace: 'prod', environment: 'prod')
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo "Pipeline failed — rolling back the last touched release."
+            sh """
+                helm rollback releasegate-dev --kubeconfig ${KUBECONFIG_PATH} --namespace dev || true
+                helm rollback releasegate-staging --kubeconfig ${KUBECONFIG_PATH} --namespace staging || true
+                helm rollback releasegate-prod --kubeconfig ${KUBECONFIG_PATH} --namespace prod || true
+            """
+        }
+        success {
+            echo "Build ${GIT_SHA} promoted through dev -> staging -> prod successfully."
+        }
+    }
+}
+
+// Polls the /health endpoint via kubectl port-forward + curl, fails the stage on non-200.
+def healthCheck(Map args) {
+    def namespace = args.namespace
+    def environment = args.environment
+    sh """
+        set -e
+        kubectl --kubeconfig ${KUBECONFIG_PATH} -n ${namespace} rollout status deployment/releasegate-app-${environment} --timeout=90s
+
+        POD=\$(kubectl --kubeconfig ${KUBECONFIG_PATH} -n ${namespace} get pod -l app=releasegate-app,environment=${environment} -o jsonpath='{.items[0].metadata.name}')
+        kubectl --kubeconfig ${KUBECONFIG_PATH} -n ${namespace} exec \$POD -- python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:5000/health').read())"
+    """
+}
