@@ -17,6 +17,8 @@ spec:
         app: releasegate-app
         environment: {{ .Values.environment }}
     spec:
+      imagePullSecrets:
+        - name: ecr-registry-secret
       containers:
         - name: releasegate-app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
