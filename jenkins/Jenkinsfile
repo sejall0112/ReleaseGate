@@ -53,15 +53,11 @@ pipeline {
             }
         }
 
-
-
-
         stage('Deploy to Dev') {
             steps {
-                // Wrap with BOTH Kubeconfig and AWS credentials
                 withCredentials([
                     file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH'),
-                    usernamePassword(credentialsId: 'aws-credentials-id', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')
+                    usernamePassword(credentialsId: 'aws-ecr', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')
                 ]) {
                     sh '''
                         export KUBECONFIG="${KUBECONFIG_PATH}"
@@ -88,63 +84,6 @@ pipeline {
                             --wait --timeout 10m
                     '''
                 }
-            }
-        }
-
-
-
-
-
-        stage('Health Check: Dev') {
-
-            steps {
-
-                script {
-
-                    healthCheck(
-                        namespace:'dev',
-                        environment:'dev'
-                    )
-
-                }
-            }
-        }
-
-
-
-
-
-
-        stage('Promote to Staging') {
-
-            steps {
-
-                sh """
-
-                    docker tag \
-                    ${ECR_REPO}:${GIT_SHA} \
-                    ${ECR_REPO}:staging
-
-
-
-                    docker push \
-                    ${ECR_REPO}:staging
-
-
-
-
-                    helm upgrade --install releasegate-staging ./helm-chart \
-                    -f ./helm-chart/values-staging.yaml \
-                    --set image.repository=${ECR_REPO} \
-                    --set image.tag=staging \
-                    --kubeconfig ${KUBECONFIG_PATH} \
-                    --namespace staging \
-                    --create-namespace \
-                    --wait \
-                    --timeout 10m
-
-
-                """
             }
         }
 
