@@ -159,146 +159,78 @@ stage('Deploy to Dev') {
             }
         }
 
-
-
-
-
-
-
-
         stage('Promote to Prod') {
-
             steps {
-
-
-                sh """
-
-                    docker tag \
-                    ${ECR_REPO}:${GIT_SHA} \
-                    ${ECR_REPO}:prod
-
-
-
-                    docker push \
-                    ${ECR_REPO}:prod
-
-
-
-
-
-                    helm upgrade --install releasegate-prod ./helm-chart \
-                    -f ./helm-chart/values-prod.yaml \
-                    --set image.repository=${ECR_REPO} \
-                    --set image.tag=prod \
-                    --kubeconfig ${KUBECONFIG_PATH} \
-                    --namespace prod \
-                    --create-namespace \
-                    --wait \
-                    --timeout 10m
-
-
-                """
+                withCredentials([
+                    file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH'),
+                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
+                ]) {
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="us-east-1"
+                        
+                        IMAGE_TAG=$(git rev-parse --short HEAD)
+                        
+                        # Retag and push prod tag natively
+                        docker tag "${ECR_REPO}:${IMAGE_TAG}" "${ECR_REPO}:prod"
+                        docker push "${ECR_REPO}:prod"
+                        
+                        kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
+                        kubectl create secret docker-registry ecr-registry-secret \
+                            --docker-server="${ECR_REPO}" \
+                            --docker-username=AWS \
+                            --docker-password="${ECR_PASSWORD}" \
+                            --namespace prod \
+                            --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        helm upgrade --install releasegate-prod ./helm-chart \
+                            -f ./helm-chart/values-prod.yaml \
+                            --set image.repository="${ECR_REPO}" \
+                            --set image.tag="prod" \
+                            --namespace prod \
+                            --wait --timeout 10m
+                    '''
+                }
             }
         }
-
-
-
-
-
 
         stage('Health Check: Prod') {
-
             steps {
-
-                script {
-
-                    healthCheck(
-                        namespace:'prod',
-                        environment:'prod'
-                    )
-
+                withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        kubectl rollout status deployment/releasegate-app-prod --namespace prod --timeout=120s
+                    '''
                 }
-
             }
         }
-
-
     }
-
-
-
-
 
     post {
-
-
         failure {
-
-
             echo "Pipeline failed."
-
-
-            sh """
-
-            echo "Checking Helm releases..."
-
-            helm list -A \
-            --kubeconfig ${KUBECONFIG_PATH}
-
-
-            echo "Attempting rollback..."
-
-
-            helm rollback releasegate-dev \
-            --namespace dev \
-            --kubeconfig ${KUBECONFIG_PATH} \
-            || true
-
-
-
-            helm rollback releasegate-staging \
-            --namespace staging \
-            --kubeconfig ${KUBECONFIG_PATH} \
-            || true
-
-
-
-            helm rollback releasegate-prod \
-            --namespace prod \
-            --kubeconfig ${KUBECONFIG_PATH} \
-            || true
-
-
-            """
-
+            withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
+                sh '''
+                    export KUBECONFIG="${KUBECONFIG_PATH}"
+                    echo "Checking Helm releases..."
+                    helm list -A
+                    
+                    echo "Attempting rollbacks..."
+                    helm rollback releasegate-dev --namespace dev || true
+                    helm rollback releasegate-staging --namespace staging || true
+                    helm rollback releasegate-prod --namespace prod || true
+                '''
+            }
         }
-
-
-
         success {
-
-
-            echo """
-            Build ${GIT_SHA}
-            promoted successfully:
-            
-            DEV
-             |
-            STAGING
-             |
-            PROD
-            """
-
+            echo "Deployment promoted successfully across DEV -> STAGING -> PROD!"
         }
-
-
     }
-
 }
-
-
-
-
 
 def healthCheck(Map args) {
 
