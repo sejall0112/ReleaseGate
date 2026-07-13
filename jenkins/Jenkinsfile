@@ -4,7 +4,7 @@ pipeline {
     environment {
         AWS_REGION      = 'us-east-1'
         ECR_REPO        = "236172119834.dkr.ecr.us-east-1.amazonaws.com/releasegate-app"
-        GIT_SHA         = "${env.GIT_COMMIT.take(7)}"
+        GIT_SHA = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'latest'}"
         KUBECONFIG_PATH = credentials('releasegate-kubeconfig') // Jenkins secret file credential
     }
 
@@ -26,7 +26,9 @@ pipeline {
                 ]) {
 
                     sh '''
-                    aws ecr get-login-password --region us-east-1 |
+                    IMAGE=${ECR_REPO}:${GIT_SHA}
+
+                    aws ecr get-login-password --region ${AWS_REGION} |
                     docker login --username AWS --password-stdin ${ECR_REPO}
 
                     docker push ${IMAGE}
