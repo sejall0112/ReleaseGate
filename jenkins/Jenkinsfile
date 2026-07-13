@@ -58,9 +58,16 @@ pipeline {
 
         stage('Deploy to Dev') {
             steps {
-                withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
+                // Wrap with BOTH Kubeconfig and AWS credentials
+                withCredentials([
+                    file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH'),
+                    usernamePassword(credentialsId: 'aws-credentials-id', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
                     sh '''
                         export KUBECONFIG="${KUBECONFIG_PATH}"
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="us-east-1"
                         
                         kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
                         
