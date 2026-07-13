@@ -54,33 +54,34 @@ pipeline {
         }
 
         stage('Deploy to Dev') {
+            environment {
+                AWS_CRED = credentials('aws-ecr')
+            }
             steps {
                 withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
-                    withCredentials([usernamePassword(credentialsId: 'aws-ecr', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                        sh '''
-                            export KUBECONFIG="${KUBECONFIG_PATH}"
-                            export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
-                            export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
-                            export AWS_DEFAULT_REGION="us-east-1"
-                            
-                            kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
-                            
-                            ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
-                            kubectl create secret docker-registry ecr-registry-secret \
-                                --docker-server="${ECR_REPO}" \
-                                --docker-username=AWS \
-                                --docker-password="${ECR_PASSWORD}" \
-                                --namespace dev \
-                                --dry-run=client -o yaml | kubectl apply -f -
-                            
-                            helm upgrade --install releasegate-dev ./helm-chart \
-                                -f ./helm-chart/values-dev.yaml \
-                                --set image.repository="${ECR_REPO}" \
-                                --set image.tag=dev \
-                                --namespace dev \
-                                --wait --timeout 10m
-                        '''
-                    }
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        export AWS_ACCESS_KEY_ID="${AWS_CRED_USR}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_CRED_PSW}"
+                        export AWS_DEFAULT_REGION="us-east-1"
+                        
+                        kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
+                        kubectl create secret docker-registry ecr-registry-secret \
+                            --docker-server="${ECR_REPO}" \
+                            --docker-username=AWS \
+                            --docker-password="${ECR_PASSWORD}" \
+                            --namespace dev \
+                            --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        helm upgrade --install releasegate-dev ./helm-chart \
+                            -f ./helm-chart/values-dev.yaml \
+                            --set image.repository="${ECR_REPO}" \
+                            --set image.tag=dev \
+                            --namespace dev \
+                            --wait --timeout 10m
+                    '''
                 }
             }
         }
@@ -97,33 +98,34 @@ pipeline {
         }
 
         stage('Promote to Staging') {
+            environment {
+                AWS_CRED = credentials('aws-ecr')
+            }
             steps {
                 withCredentials([file(credentialsId: 'releasegate-kubeconfig', variable: 'KUBECONFIG_PATH')]) {
-                    withCredentials([usernamePassword(credentialsId: 'aws-ecr', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                        sh '''
-                            export KUBECONFIG="${KUBECONFIG_PATH}"
-                            export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
-                            export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
-                            export AWS_DEFAULT_REGION="us-east-1"
-                            
-                            kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
-                            
-                            ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
-                            kubectl create secret docker-registry ecr-registry-secret \
-                                --docker-server="${ECR_REPO}" \
-                                --docker-username=AWS \
-                                --docker-password="${ECR_PASSWORD}" \
-                                --namespace staging \
-                                --dry-run=client -o yaml | kubectl apply -f -
-                            
-                            helm upgrade --install releasegate-staging ./helm-chart \
-                                -f ./helm-chart/values-staging.yaml \
-                                --set image.repository="${ECR_REPO}" \
-                                --set image.tag=staging \
-                                --namespace staging \
-                                --wait --timeout 10m
-                        '''
-                    }
+                    sh '''
+                        export KUBECONFIG="${KUBECONFIG_PATH}"
+                        export AWS_ACCESS_KEY_ID="${AWS_CRED_USR}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_CRED_PSW}"
+                        export AWS_DEFAULT_REGION="us-east-1"
+                        
+                        kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
+                        kubectl create secret docker-registry ecr-registry-secret \
+                            --docker-server="${ECR_REPO}" \
+                            --docker-username=AWS \
+                            --docker-password="${ECR_PASSWORD}" \
+                            --namespace staging \
+                            --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        helm upgrade --install releasegate-staging ./helm-chart \
+                            -f ./helm-chart/values-staging.yaml \
+                            --set image.repository="${ECR_REPO}" \
+                            --set image.tag=staging \
+                            --namespace staging \
+                            --wait --timeout 10m
+                    '''
                 }
             }
         }
