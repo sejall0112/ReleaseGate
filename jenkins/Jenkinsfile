@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         AWS_REGION      = 'us-east-1'
-        ECR_REPO        = "<account-id>.dkr.ecr.${AWS_REGION}.amazonaws.com/releasegate-app"
+        ECR_REPO        = "236172119834.dkr.ecr.us-east-1.amazonaws.com/releasegate-app"
         GIT_SHA         = "${env.GIT_COMMIT.take(7)}"
         KUBECONFIG_PATH = credentials('releasegate-kubeconfig') // Jenkins secret file credential
     }
