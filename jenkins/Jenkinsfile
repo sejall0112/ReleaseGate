@@ -49,7 +49,7 @@ pipeline {
                         --set image.tag=dev \
                         --kubeconfig ${KUBECONFIG_PATH} \
                         --namespace dev --create-namespace \
-                        --atomic --timeout 2m
+                        --atomic --timeout 5m
                 """
             }
         }
@@ -75,7 +75,7 @@ pipeline {
                         --set image.tag=staging \
                         --kubeconfig ${KUBECONFIG_PATH} \
                         --namespace staging --create-namespace \
-                        --atomic --timeout 2m
+                        --atomic --timeout 5m
                 """
             }
         }
@@ -107,7 +107,7 @@ pipeline {
                         --set image.tag=prod \
                         --kubeconfig ${KUBECONFIG_PATH} \
                         --namespace prod --create-namespace \
-                        --atomic --timeout 2m
+                        --atomic --timeout 5m
                 """
             }
         }
